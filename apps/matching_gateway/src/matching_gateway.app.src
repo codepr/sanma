@@ -5,7 +5,10 @@
     {mod, {matching_gateway_app, []}},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+        cowboy,
+        cowlib,
+        jiffy
     ]},
     {env, []},
     {modules, []},
