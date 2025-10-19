@@ -13,7 +13,10 @@ CFLAGS=-Wall                                  \
 LDFLAGS = -L/opt/homebrew/lib -lprofiler
 
 ME_SRC = src/main.c       \
-           src/iomux.c
+         src/iomux.c      \
+	 src/orderbook.c  \
+	 src/server.c     \
+	 src/timeutil.c
 
 ME_OBJ = $(ME_SRC:.c=.o)
 ME_EXEC = matching-engine-dev
