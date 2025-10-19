@@ -197,6 +197,7 @@ int engine_server_start(Engine_Server *server)
     }
 
     iomux_free(iomux);
+    unlink(SOCKET_PATH);
 
     return 0;
 }
