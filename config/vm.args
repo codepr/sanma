@@ -1,6 +1,6 @@
--sname matching_gateway
+-sname sanma_gateway
 
--setcookie matching_gateway_cookie
+-setcookie sanma_gateway_cookie
 
 +K true
 +A30

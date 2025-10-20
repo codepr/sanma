@@ -10,13 +10,13 @@
 -define(MSG_ORDER_ACK, 2).
 -define(MSG_ORDER_REJECT, 3).
 -define(MSG_TRADE, 4).
--define(MSG_CANCEL_ORDER, 5).
+% TODO support ORDER_CANCEL
 
 -define(ORDER_BUY, 0).
 -define(ORDER_SELL, 1).
 
 -define(ORDER_LIMIT, 0).
--define(ORDER_MARKET, 1).
+% TODO support ORDER_MARKET
 
 -record(state, {
                 socket :: gen_tcp:socket(),
@@ -25,7 +25,7 @@
                }).
 
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({global, ?MODULE}, ?MODULE, [], []).
 
 %% @doc Submit a new order
 %% Side: buy | sell

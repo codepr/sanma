@@ -33,7 +33,7 @@ init(Req, State) ->
     end.
 
 submit_order(Side, Price, Quantity, Req, State) ->
-    case matching_gateway:submit_order(Side, Price, Quantity, ?SUBMIT_TIMEOUT) of
+    case gen_server:call({global, matching_gateway}, {submit_order, Side, Price, Quantity}, ?SUBMIT_TIMEOUT) of
         {ok, OrderId} ->
             io:format("Submitted buy order: ~p~n", [OrderId]),
             Reply = reply_json(200, #{order_id => OrderId}, Req),

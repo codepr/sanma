@@ -1,8 +1,8 @@
-{application, matching_gateway, [
+{application, fix_gateway, [
     {description, "An OTP application"},
     {vsn, "0.1.0"},
     {registered, []},
-    {mod, {matching_gateway_app, []}},
+    {mod, {fix_gateway_app, []}},
     {applications, [
         kernel,
         stdlib

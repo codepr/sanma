@@ -1,6 +1,6 @@
 -module(ping_handler).
 
--export([init/2]).
+-export([init/2, allowed_methods/2]).
 
 init(Req, Opts) ->
     Reply = cowboy_req:reply(200, #{

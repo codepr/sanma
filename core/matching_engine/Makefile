@@ -8,7 +8,7 @@ CFLAGS=-Wall                                  \
        -fsanitize=undefined                   \
        -fno-omit-frame-pointer                \
        -Wno-gnu-zero-variadic-macro-arguments \
-	   -I/opt/homebrew/include
+       -I/opt/homebrew/include
 
 LDFLAGS = -L/opt/homebrew/lib -lprofiler
 
