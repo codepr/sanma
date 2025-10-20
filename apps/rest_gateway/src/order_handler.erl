@@ -33,6 +33,8 @@ init(Req, State) ->
     end.
 
 submit_order(Side, Price, Quantity, Req, State) ->
+    % TODO this will eventually be translated into an utility gateway,
+    % not directly used to operate trading
     case gen_server:call({global, matching_gateway}, {submit_order, Side, Price, Quantity}, ?SUBMIT_TIMEOUT) of
         {ok, OrderId} ->
             io:format("Submitted buy order: ~p~n", [OrderId]),

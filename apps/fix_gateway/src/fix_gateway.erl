@@ -153,7 +153,6 @@ process(_MsgType, _Message, State) ->
 %% Internal utilities
 %% ============================================================================
 
-
 build_fix_message(MsgType, Fields, State) ->
     SendingTime = format_fix_timestamp(erlang:system_time(millisecond)),
 
