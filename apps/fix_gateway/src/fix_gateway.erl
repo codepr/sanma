@@ -9,8 +9,15 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 -define(DEFAULT_PORT, 8081).
+-define(SUBMIT_TIMEOUT, 5000).
 
+-define(FIX_LOGON, "A").
+-define(FIX_LOGOUT, "5").
 -define(FIX_HEARTBEAT, "0").
+-define(FIX_NEW_ORDER_SINGLE, "D").
+-define(FIX_ORDER_CANCEL_REQUEST, "F").
+-define(FIX_EXECUTION_REPORT, "8").
+-define(FIX_ORDER_CANCEL_REJECT, "9").
 
 %% FIX Tags
 -define(TAG_BEGIN_STRING, "8").
@@ -21,6 +28,9 @@
 -define(TAG_MSG_SEQ_NUM, "34").
 -define(TAG_SENDING_TIME, "52").
 -define(TAG_CHECKSUM, "10").
+
+%% Order tags
+-define(TAG_CL_ORD_ID, "11").
 
 -record(state, {
     socket :: gen_tcp:socket(),
@@ -145,9 +155,59 @@ process_fix_message(Message, State) ->
     MsgType = maps:get(<<"35">>, Message, undefined),
     process(MsgType, Message, State).
 
-process(_MsgType, _Message, State) ->
-    % TODO
-    State.
+% LOGON message
+process(?FIX_LOGON, Message, State) ->
+    SenderCompId = maps:get(<<"49">>, Message),
+    TargetCompId = maps:get(<<"56">>, Message),
+
+    case authenticate_session(SenderCompId) of
+        {ok, AccountId} ->
+            logger:info("FIX Logon: ~s", [SenderCompId]),
+
+            send_logon_response(State),
+
+            Timer = erlang:send_after(30000, self(), {heartbeat}),
+
+            State#state{sender_comp_id = SenderCompId,
+                        target_comp_id = TargetCompId,
+                        account_id = AccountId,
+                        authenticated = true,
+                        heartbeat_timer = Timer };
+        {error, _Reason} ->
+            send_logout(<<"Authentication failed">>, State),
+            State
+    end;
+
+% New Order - Single
+process(?FIX_NEW_ORDER_SINGLE, Message, #state{authenticated = true} = State) ->
+    ClOrdId = maps:get(<<"11">>, Message),
+    Symbol = maps:get(<<"55">>, Message),
+    SideRaw = maps:get(<<"54">>, Message),
+    OrderQty = binary_to_integer(maps:get(<<"38">>, Message)),
+    OrdType = maps:get(<<"40">>, Message),
+    Price = case OrdType of
+      <<"2">> -> binary_to_integer(maps:get(<<"44">>, Message));
+      _ -> 0
+            end,
+    Side = case SideRaw of
+      <<"1">> -> buy;
+    <<"2">> -> sell
+           end,
+
+    Order = #{client_order_id => ClOrdId, symbol => Symbol, side => Side, quantity => OrderQty, price => Price, account_id => State#state.account_id },
+
+    case submit_order(State#state.session_id, Order) of
+        {ok, _OrderId} ->
+            % TODO send a new execution report here
+            State;
+        {error, Reason} ->
+            send_order_cancel_reject(ClOrdId, Reason, State),
+            State
+    end;
+
+process(?FIX_HEARTBEAT, _Message, State) -> State;
+process(?FIX_LOGOUT, _Message, State) -> send_logout(<<"Logout acknowledged">>, State), State;
+process(_Unknown, _Message, State) -> State.
 
 %% ============================================================================
 %% Internal utilities
@@ -208,3 +268,27 @@ send_heartbeat(TestReqId, State) ->
     end,
     Message = build_fix_message(?FIX_HEARTBEAT, Fields, State),
     send_fix_message(Message, State).
+
+send_logon_response(State) ->
+    Message = build_fix_message(?FIX_LOGON, [ {<<"98">>, <<"0">>}, {<<"108">>, <<"30">>}], State), send_fix_message(Message, State).
+
+send_logout(Text, State) ->
+    Message = build_fix_message(?FIX_LOGOUT, [{<<"58">>, Text}], State), send_fix_message(Message, State).
+
+send_order_cancel_reject(ClOrdId, Reason, State) ->
+    Message = build_fix_message(?FIX_ORDER_CANCEL_REJECT, [
+        {?TAG_CL_ORD_ID, ClOrdId},
+        {<<"102">>, <<"1">>},  % CxlRejReason=Unknown order
+        {<<"58">>, atom_to_binary(Reason)}  % Text
+    ], State),
+    send_fix_message(Message, State).
+
+authenticate_session(SenderCompId) ->
+    %% TODO Validate SenderCompId against database
+    %% TODO check credentials
+    {ok, <<"account_", SenderCompId/binary>>}.
+
+submit_order(_SessionId, Order) ->
+    #{side := Side, price := Price, quantity := Quantity} = Order,
+    gen_server:call({global, matching_gateway}, {submit_order, Side, Price, Quantity}, ?SUBMIT_TIMEOUT).
+
