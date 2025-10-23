@@ -31,6 +31,18 @@
 
 %% Order tags
 -define(TAG_CL_ORD_ID, "11").
+-define(TAG_SYMBOL, "55").
+-define(TAG_SIDE, "54").
+-define(TAG_ORDER_QTY, "38").
+-define(TAG_PRICE, "44").
+
+%% Execution Report tags
+-define(TAG_ORDER_ID, "37").
+-define(TAG_EXEC_ID, "17").
+-define(TAG_EXEC_TYPE, "150").
+-define(TAG_ORD_STATUS, "39").
+-define(TAG_CUM_QTY, "14").
+-define(TAG_AVG_PX, "6").
 
 -record(state, {
     socket :: gen_tcp:socket(),
@@ -168,16 +180,17 @@ process(?FIX_LOGON, Message, State) ->
 
             Timer = erlang:send_after(30000, self(), {heartbeat}),
 
-            State#state{sender_comp_id = SenderCompId,
-                        target_comp_id = TargetCompId,
-                        account_id = AccountId,
-                        authenticated = true,
-                        heartbeat_timer = Timer };
+            State#state{
+                sender_comp_id = SenderCompId,
+                target_comp_id = TargetCompId,
+                account_id = AccountId,
+                authenticated = true,
+                heartbeat_timer = Timer
+            };
         {error, _Reason} ->
             send_logout(<<"Authentication failed">>, State),
             State
     end;
-
 % New Order - Single
 process(?FIX_NEW_ORDER_SINGLE, Message, #state{authenticated = true} = State) ->
     ClOrdId = maps:get(<<"11">>, Message),
@@ -185,29 +198,54 @@ process(?FIX_NEW_ORDER_SINGLE, Message, #state{authenticated = true} = State) ->
     SideRaw = maps:get(<<"54">>, Message),
     OrderQty = binary_to_integer(maps:get(<<"38">>, Message)),
     OrdType = maps:get(<<"40">>, Message),
-    Price = case OrdType of
-      <<"2">> -> binary_to_integer(maps:get(<<"44">>, Message));
-      _ -> 0
-            end,
-    Side = case SideRaw of
-      <<"1">> -> buy;
-    <<"2">> -> sell
-           end,
+    Price =
+        case OrdType of
+            <<"2">> -> binary_to_integer(maps:get(<<"44">>, Message));
+            _ -> 0
+        end,
+    Side =
+        case SideRaw of
+            <<"1">> -> buy;
+            <<"2">> -> sell
+        end,
 
-    Order = #{client_order_id => ClOrdId, symbol => Symbol, side => Side, quantity => OrderQty, price => Price, account_id => State#state.account_id },
+    Order = #{
+        client_order_id => ClOrdId,
+        symbol => Symbol,
+        side => Side,
+        quantity => OrderQty,
+        price => Price,
+        account_id => State#state.account_id
+    },
 
     case submit_order(State#state.session_id, Order) of
-        {ok, _OrderId} ->
-            % TODO send a new execution report here
+        {ok, OrderId} ->
+            send_execution_report_new(ClOrdId, OrderId, Order, State),
             State;
         {error, Reason} ->
             send_order_cancel_reject(ClOrdId, Reason, State),
             State
     end;
+process(?FIX_ORDER_CANCEL_REQUEST, Message, #state{authenticated = true} = State) ->
+    OrigClOrdId = maps:get(<<"41">>, Message),
+    ClOrdId = maps:get(<<"11">>, Message),
 
-process(?FIX_HEARTBEAT, _Message, State) -> State;
-process(?FIX_LOGOUT, _Message, State) -> send_logout(<<"Logout acknowledged">>, State), State;
-process(_Unknown, _Message, State) -> State.
+    %% Cancel order in matching engine
+    case matching_gateway:cancel_order(OrigClOrdId) of
+        ok ->
+            send_execution_report_cancelled(ClOrdId, State),
+            State;
+        {error, Reason} ->
+            send_order_cancel_reject(ClOrdId, Reason, State),
+            State
+    end;
+process(?FIX_HEARTBEAT, _Message, State) ->
+    State;
+process(?FIX_LOGOUT, _Message, State) ->
+    send_logout(<<"Logout acknowledged">>, State),
+    State;
+process(_Unknown, _Message, State) ->
+    State.
 
 %% ============================================================================
 %% Internal utilities
@@ -227,20 +265,24 @@ build_fix_message(MsgType, Fields, State) ->
     ],
 
     %% Convert to FIX format
-    BodyBinary = lists:foldl(fun({Tag, Value}, Acc) ->
-        <<Acc/binary, Tag/binary, "=", Value/binary, 1>>
-    end, <<>>, Body),
+    BodyBinary = lists:foldl(
+        fun({Tag, Value}, Acc) ->
+            <<Acc/binary, Tag/binary, "=", Value/binary, 1>>
+        end,
+        <<>>,
+        Body
+    ),
 
     %% Calculate checksum
     BodyLength = integer_to_binary(byte_size(BodyBinary)),
-    Header = <<?TAG_BEGIN_STRING/binary, "=FIX.4.4", 1,
-               ?TAG_BODY_LENGTH/binary, "=", BodyLength/binary, 1>>,
+    Header =
+        <<?TAG_BEGIN_STRING/binary, "=FIX.4.4", 1, ?TAG_BODY_LENGTH/binary, "=", BodyLength/binary,
+            1>>,
 
     MessageWithoutChecksum = <<Header/binary, BodyBinary/binary>>,
     Checksum = calculate_checksum(MessageWithoutChecksum),
 
-    <<MessageWithoutChecksum/binary,
-      ?TAG_CHECKSUM/binary, "=", Checksum/binary, 1>>.
+    <<MessageWithoutChecksum/binary, ?TAG_CHECKSUM/binary, "=", Checksum/binary, 1>>.
 
 calculate_checksum(Message) ->
     Sum = lists:foldl(fun(Byte, Acc) -> Acc + Byte end, 0, binary_to_list(Message)),
@@ -251,8 +293,10 @@ format_fix_timestamp(Milliseconds) ->
     {{Year, Month, Day}, {Hour, Minute, Second}} =
         calendar:system_time_to_universal_time(Milliseconds, millisecond),
     Ms = Milliseconds rem 1000,
-    io_lib:format("~4..0B~2..0B~2..0B-~2..0B:~2..0B:~2..0B.~3..0B",
-                  [Year, Month, Day, Hour, Minute, Second, Ms]).
+    io_lib:format(
+        "~4..0B~2..0B~2..0B-~2..0B:~2..0B:~2..0B.~3..0B",
+        [Year, Month, Day, Hour, Minute, Second, Ms]
+    ).
 
 send_fix_message(Message, State) ->
     gen_tcp:send(State#state.socket, Message),
@@ -262,25 +306,75 @@ send_heartbeat(State) ->
     send_heartbeat(<<>>, State).
 
 send_heartbeat(TestReqId, State) ->
-    Fields = case TestReqId of
-        <<>> -> [];
-        _ -> [{<<"112">>, TestReqId}]  % TestReqID
-    end,
+    Fields =
+        case TestReqId of
+            <<>> -> [];
+            % TestReqID
+            _ -> [{<<"112">>, TestReqId}]
+        end,
     Message = build_fix_message(?FIX_HEARTBEAT, Fields, State),
     send_fix_message(Message, State).
 
 send_logon_response(State) ->
-    Message = build_fix_message(?FIX_LOGON, [ {<<"98">>, <<"0">>}, {<<"108">>, <<"30">>}], State), send_fix_message(Message, State).
+    Message = build_fix_message(?FIX_LOGON, [{<<"98">>, <<"0">>}, {<<"108">>, <<"30">>}], State),
+    send_fix_message(Message, State).
 
 send_logout(Text, State) ->
-    Message = build_fix_message(?FIX_LOGOUT, [{<<"58">>, Text}], State), send_fix_message(Message, State).
+    Message = build_fix_message(?FIX_LOGOUT, [{<<"58">>, Text}], State),
+    send_fix_message(Message, State).
+
+send_execution_report_new(ClOrdId, OrderId, Order, State) ->
+    Message = build_fix_message(
+        ?FIX_EXECUTION_REPORT,
+        [
+            {?TAG_ORDER_ID, integer_to_binary(OrderId)},
+            {?TAG_CL_ORD_ID, ClOrdId},
+            {?TAG_EXEC_ID, generate_exec_id()},
+            % 0=New
+            {?TAG_EXEC_TYPE, <<"0">>},
+            % 0=New
+            {?TAG_ORD_STATUS, <<"0">>},
+            {?TAG_SYMBOL, maps:get(symbol, Order)},
+            {?TAG_SIDE,
+                case maps:get(side, Order) of
+                    buy -> <<"1">>;
+                    sell -> <<"2">>
+                end},
+            {?TAG_ORDER_QTY, integer_to_binary(maps:get(quantity, Order))},
+            {?TAG_PRICE, integer_to_binary(maps:get(price, Order))},
+            {?TAG_CUM_QTY, <<"0">>},
+            {?TAG_AVG_PX, <<"0">>}
+        ],
+        State
+    ),
+    send_fix_message(Message, State).
+
+send_execution_report_cancelled(ClOrdId, State) ->
+    Message = build_fix_message(
+        ?FIX_EXECUTION_REPORT,
+        [
+            {?TAG_CL_ORD_ID, ClOrdId},
+            % 4=Canceled
+            {?TAG_EXEC_TYPE, <<"4">>},
+            % 4=Canceled
+            {?TAG_ORD_STATUS, <<"4">>}
+        ],
+        State
+    ),
+    send_fix_message(Message, State).
 
 send_order_cancel_reject(ClOrdId, Reason, State) ->
-    Message = build_fix_message(?FIX_ORDER_CANCEL_REJECT, [
-        {?TAG_CL_ORD_ID, ClOrdId},
-        {<<"102">>, <<"1">>},  % CxlRejReason=Unknown order
-        {<<"58">>, atom_to_binary(Reason)}  % Text
-    ], State),
+    Message = build_fix_message(
+        ?FIX_ORDER_CANCEL_REJECT,
+        [
+            {?TAG_CL_ORD_ID, ClOrdId},
+            % CxlRejReason=Unknown order
+            {<<"102">>, <<"1">>},
+            % Text
+            {<<"58">>, atom_to_binary(Reason)}
+        ],
+        State
+    ),
     send_fix_message(Message, State).
 
 authenticate_session(SenderCompId) ->
@@ -288,7 +382,11 @@ authenticate_session(SenderCompId) ->
     %% TODO check credentials
     {ok, <<"account_", SenderCompId/binary>>}.
 
+generate_exec_id() ->
+    integer_to_binary(erlang:unique_integer([positive])).
+
 submit_order(_SessionId, Order) ->
     #{side := Side, price := Price, quantity := Quantity} = Order,
-    gen_server:call({global, matching_gateway}, {submit_order, Side, Price, Quantity}, ?SUBMIT_TIMEOUT).
-
+    gen_server:call(
+        {global, matching_gateway}, {submit_order, Side, Price, Quantity}, ?SUBMIT_TIMEOUT
+    ).
